@@ -1,148 +1,16 @@
-import os, inspect
-currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-
+import os
 import pybullet as p
 import pybullet_data
 import time
-
-import math
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import norm
 
 
+# -------------------------
+# PYBULLET SETUP
+# -------------------------
 
-# --------------------------
-# GAUSSIAN GRID MAP
-# --------------------------
-
-EXTEND_AREA = 10.0
-
-xyreso = 0.5
-STD = 5.0
-
-
-
-def calc_grid_map_config(ox, oy, xyreso):
-
-    minx = round(min(ox) - EXTEND_AREA/2.0)
-    miny = round(min(oy) - EXTEND_AREA/2.0)
-
-    maxx = round(max(ox) + EXTEND_AREA/2.0)
-    maxy = round(max(oy) + EXTEND_AREA/2.0)
-
-
-    xw = int(round((maxx-minx)/xyreso))
-    yw = int(round((maxy-miny)/xyreso))
-
-
-    return minx,miny,maxx,maxy,xw,yw
-
-
-
-
-def generate_gaussian_grid_map(ox, oy, xyreso, std):
-
-
-    minx,miny,maxx,maxy,xw,yw = calc_grid_map_config(
-        ox,oy,xyreso
-    )
-
-
-    gmap = [
-        [0.0 for i in range(yw)]
-        for i in range(xw)
-    ]
-
-
-    for ix in range(xw):
-
-        for iy in range(yw):
-
-
-            x = ix*xyreso + minx
-            y = iy*xyreso + miny
-
-
-            mindis = float("inf")
-
-
-            for iox,ioy in zip(ox,oy):
-
-                d = math.hypot(
-                    iox-x,
-                    ioy-y
-                )
-
-                if d < mindis:
-                    mindis=d
-
-
-
-            pdf = 1.0 - norm.cdf(
-                mindis,
-                0.0,
-                std
-            )
-
-
-            gmap[ix][iy]=pdf
-
-
-
-    return gmap,minx,maxx,miny,maxy
-
-
-
-
-def draw_heatmap(data,minx,maxx,miny,maxy,xyreso):
-
-    x,y=np.mgrid[
-        slice(minx-xyreso/2,
-              maxx+xyreso/2,
-              xyreso),
-
-        slice(miny-xyreso/2,
-              maxy+xyreso/2,
-              xyreso)
-    ]
-
-
-    plt.pcolor(
-        x,
-        y,
-        data,
-        vmax=1.0,
-        cmap=plt.cm.Blues
-    )
-
-
-    plt.axis("equal")
-
-
-
-
-
-# --------------------------
-# PYBULLET
-# SAME CAMERA
-# SAME MOTION
-# --------------------------
-
-cid = p.connect(p.SHARED_MEMORY)
-
-if cid < 0:
-    p.connect(p.GUI)
-
-
-
-p.resetDebugVisualizerCamera(
-    cameraDistance=15,
-    cameraYaw=-0,
-    cameraPitch=-55,
-    cameraTargetPosition=[0,0,0]
-)
-
+p.connect(p.GUI)
 
 p.resetSimulation()
 
@@ -151,6 +19,13 @@ p.setGravity(0,0,-10)
 p.setRealTimeSimulation(1)
 
 
+p.resetDebugVisualizerCamera(
+    cameraDistance=15,
+    cameraYaw=0,
+    cameraPitch=-55,
+    cameraTargetPosition=[0,0,0]
+)
+
 
 p.loadSDF(
     os.path.join(
@@ -158,7 +33,6 @@ p.loadSDF(
         "stadium.sdf"
     )
 )
-
 
 
 car = p.loadURDF(
@@ -170,134 +44,442 @@ car = p.loadURDF(
 
 
 
-
-# --------------------------
-# VELOCITY
-# SAME
-# --------------------------
+# -------------------------
+# MOTION
+# -------------------------
 
 linear_speed = 2
 angular_speed = 1
 
 
 
+# -------------------------
+# OBSTACLES
+# -------------------------
 
-# --------------------------
-# MAPPING MEMORY
-# --------------------------
+def create_obstacle(size,x,y):
 
-ox=[]
-oy=[]
+    collision = p.createCollisionShape(
+        p.GEOM_BOX,
+        halfExtents=[
+            size,
+            size,
+            size
+        ]
+    )
 
 
+    visual = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[
+            size,
+            size,
+            size
+        ],
+        rgbaColor=[
+            1,
+            0,
+            0,
+            1
+        ]
+    )
+
+
+    p.createMultiBody(
+
+        baseMass=0,
+
+        baseCollisionShapeIndex=collision,
+
+        baseVisualShapeIndex=visual,
+
+        basePosition=[
+            x,
+            y,
+            size
+        ]
+
+    )
+
+
+create_obstacle(1,5,5)
+create_obstacle(1,-5,5)
+create_obstacle(1,8,-3)
+create_obstacle(1,-8,-4)
+create_obstacle(0.5,3,-6)
+create_obstacle(1.5,-2,7)
+
+
+
+# -------------------------
+# LIDAR
+# -------------------------
+
+NUM_RAYS = 360
+LIDAR_RANGE = 15
+
+
+
+def simulate_lidar(pos,orn):
+
+    yaw = p.getEulerFromQuaternion(orn)[2]
+
+
+    ray_from=[]
+    ray_to=[]
+
+
+    for i in range(NUM_RAYS):
+
+        angle = yaw + (
+            -np.pi +
+            2*np.pi*i/NUM_RAYS
+        )
+
+
+        start=[
+
+            pos[0],
+            pos[1],
+            pos[2]+0.3
+
+        ]
+
+
+        end=[
+
+            pos[0]+LIDAR_RANGE*np.cos(angle),
+
+            pos[1]+LIDAR_RANGE*np.sin(angle),
+
+            pos[2]+0.3
+
+        ]
+
+
+        ray_from.append(start)
+        ray_to.append(end)
+
+
+
+    results=p.rayTestBatch(
+        ray_from,
+        ray_to
+    )
+
+
+    points=[]
+
+
+    for r in results:
+
+        if r[0]!=-1:
+
+            points.append(
+                [
+                    r[3][0],
+                    r[3][1]
+                ]
+            )
+
+
+    return points,ray_from,ray_to,results
+
+
+
+
+
+# -------------------------
+# GRID MAP
+# -------------------------
+
+resolution=0.5
+
+GRID_SIZE=60
+
+
+grid=np.ones(
+    (GRID_SIZE,GRID_SIZE)
+)*0.5
+
+
+
+def world_to_grid(x,y):
+
+    return (
+
+        int(x/resolution+GRID_SIZE/2),
+
+        int(y/resolution+GRID_SIZE/2)
+
+    )
+
+
+
+def bresenham(x0,y0,x1,y1):
+
+    points=[]
+
+    dx=abs(x1-x0)
+    dy=abs(y1-y0)
+
+
+    sx=1 if x0<x1 else -1
+    sy=1 if y0<y1 else -1
+
+
+    err=dx-dy
+
+
+    while True:
+
+        points.append(
+            (x0,y0)
+        )
+
+        if x0==x1 and y0==y1:
+            break
+
+
+        e2=2*err
+
+
+        if e2>-dy:
+
+            err-=dy
+            x0+=sx
+
+
+        if e2<dx:
+
+            err+=dx
+            y0+=sy
+
+
+    return points
+
+
+
+
+def update_grid(
+        rays_start,
+        rays_end,
+        results):
+
+
+    for s,e,r in zip(
+        rays_start,
+        rays_end,
+        results
+    ):
+
+
+        sx,sy=world_to_grid(
+            s[0],
+            s[1]
+        )
+
+
+        if r[0]!=-1:
+
+            hit=r[3]
+
+            ex,ey=world_to_grid(
+                hit[0],
+                hit[1]
+            )
+
+
+        else:
+
+            ex,ey=world_to_grid(
+                e[0],
+                e[1]
+            )
+
+
+        cells=bresenham(
+            sx,
+            sy,
+            ex,
+            ey
+        )
+
+
+        for c in cells[:-1]:
+
+            x,y=c
+
+            if 0<=x<GRID_SIZE and 0<=y<GRID_SIZE:
+
+                grid[x,y]=0
+
+
+
+        if r[0]!=-1:
+
+            x,y=cells[-1]
+
+            if 0<=x<GRID_SIZE and 0<=y<GRID_SIZE:
+
+                grid[x,y]=1
+
+
+
+
+# -------------------------
+# PLOT
+# -------------------------
 
 plt.ion()
 
+fig,ax=plt.subplots()
 
 
 
-# --------------------------
+# -------------------------
 # LOOP
-# --------------------------
+# -------------------------
 
 while True:
 
 
-    # CAR POSE
+    pos,orn=p.getBasePositionAndOrientation(car)
 
-    pos,orn = p.getBasePositionAndOrientation(car)
-
-
-    x=pos[0]
-    y=pos[1]
-
-
-
-    # store observations
-
-    ox.append(x)
-    oy.append(y)
-
-
-
-    # ----------------------
-    # SAME MOTION
-    # ----------------------
 
     rotation=p.getMatrixFromQuaternion(orn)
 
 
     forward=[
+
         rotation[0],
         rotation[3],
         rotation[6]
+
     ]
-
-
-    linear_velocity=[
-        forward[0]*linear_speed,
-        forward[1]*linear_speed,
-        0
-    ]
-
 
 
     p.resetBaseVelocity(
+
         car,
-        linearVelocity=linear_velocity,
+
+        linearVelocity=[
+
+            forward[0]*linear_speed,
+
+            forward[1]*linear_speed,
+
+            0
+
+        ],
+
+
         angularVelocity=[
+
             0,
             0,
             angular_speed
+
         ]
+
     )
 
 
 
-    # ----------------------
-    # UPDATE GAUSSIAN MAP
-    # ----------------------
+    lidar,rays1,rays2,results = simulate_lidar(
+        pos,
+        orn
+    )
 
-    gmap,minx,maxx,miny,maxy = generate_gaussian_grid_map(
-        ox,
-        oy,
-        xyreso,
-        STD
+
+    update_grid(
+        rays1,
+        rays2,
+        results
     )
 
 
 
-    plt.cla()
+    # -------------------------
+    # DRAW GRID
+    # -------------------------
+
+    ax.clear()
 
 
-    draw_heatmap(
-        gmap,
-        minx,
-        maxx,
-        miny,
-        maxy,
-        xyreso
+    ax.imshow(
+
+        grid.T,
+
+        origin="lower",
+
+        cmap="gray",
+
+        vmin=0,
+
+        vmax=1
+
     )
 
 
-    plt.plot(
-        ox,
-        oy,
-        "xr"
+    # lidar points
+
+    if len(lidar)>0:
+
+        pts=np.array(lidar)
+
+        gx=[]
+        gy=[]
+
+
+        for x,y in pts:
+
+            ix,iy=world_to_grid(x,y)
+
+            gx.append(ix)
+            gy.append(iy)
+
+
+
+        ax.scatter(
+
+            gx,
+            gy,
+
+            c="black",
+
+            s=15
+
+        )
+
+
+
+    # robot
+
+    rx,ry=world_to_grid(
+        pos[0],
+        pos[1]
     )
 
 
-    plt.plot(
-        x,
-        y,
-        "ob"
+    ax.scatter(
+
+        rx,
+        ry,
+
+        c="red",
+
+        s=80
+
     )
 
 
-    plt.title("RaceCar Gaussian Grid Map")
+
+    ax.set_title(
+        "Racecar LiDAR Occupancy Grid"
+    )
+
 
     plt.pause(0.01)
-
-
 
     time.sleep(0.01)
