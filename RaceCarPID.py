@@ -4,9 +4,7 @@ import pybullet_data
 import time
 import numpy as np
 import math
-
-
-
+import matplotlib.pyplot as plt
 
 
 p.connect(p.GUI)
@@ -27,7 +25,7 @@ p.resetDebugVisualizerCamera(
 p.loadSDF(
     os.path.join(
         pybullet_data.getDataPath(),
-        "stadium.sdf"
+        "plane_stadium.sdf"
     )
 )
 
@@ -84,20 +82,35 @@ def create_obstacle(
     return obstacle
 
 
-"""
 create_obstacle(
     x=5,
     y=5,
-    width=0.5,
-    length=0.5,
+    width=3,
+    length=2,
     height=1
 )
-"""
+
+create_obstacle(
+    x=-7,
+    y= 7,
+    width=1,
+    length=1,
+    height=1
+)
+
+create_obstacle(
+    x=-2,
+    y=-4,
+    width=1,
+    length=1,
+    height=1
+)
+
 
 class PIDController:
 
     def __init__(self):
-
+        self.lidar_debug_ids = []
         self.car = p.loadURDF(
             os.path.join(
                 pybullet_data.getDataPath(),
@@ -116,8 +129,8 @@ class PIDController:
         self.k1 = 1.029052003
         self.k2 = 4.507840493
 
-        self.k11 = 0.4
-        self.k22 = 0.57989302
+        self.k11 = 0.2
+        self.k22 = 0.2
 
         self.k111 = 0.03
         self.k222 = 0.001
@@ -138,8 +151,168 @@ class PIDController:
         self.turn_threshold = math.radians(5)
         self.return_to_turn_threshold = math.radians(10)
 
+        # Global point cloud
+        self.point_cloud = []
+
+        # Update every 0.5 s
+        self.map_update_period = 0.5
+        self.last_map_update = time.time()
+
+        # Interactive plotting
+        plt.ion()
+        self.fig, self.ax = plt.subplots(figsize=(7,7))
+
+    def get_lidar(self, num_rays=72, max_distance=10, visualize=False):
+
+        pos, orn = p.getBasePositionAndOrientation(self.car)
+
+        x, y, z = pos
+
+        yaw = p.getEulerFromQuaternion(orn)[2]
+
+        ray_from = []
+        ray_to = []
+
+        for i in range(num_rays):
+
+            angle = yaw + 2 * math.pi * i / num_rays
+
+            ray_from.append([
+                x,
+                y,
+                z + 0.2
+            ])
+
+            ray_to.append([
+                x + max_distance * math.cos(angle),
+                y + max_distance * math.sin(angle),
+                z + 0.2
+            ])
+
+
+        results = p.rayTestBatch(
+            ray_from,
+            ray_to
+        )
+
+        lidar = []
+
+        # remove old lines
+        if visualize:
+            for line in self.lidar_debug_ids:
+                p.removeUserDebugItem(line)
+
+            self.lidar_debug_ids = []
+
+
+        for i, result in enumerate(results):
+
+            hit = result[0]
+            fraction = result[2]
+
+            distance = (
+                fraction * max_distance
+                if hit != -1
+                else max_distance
+            )
+
+            lidar.append(distance)
+
+
+            if visualize:
+
+                end = [
+                    ray_from[i][0] +
+                    (ray_to[i][0]-ray_from[i][0]) *
+                    distance/max_distance,
+
+                    ray_from[i][1] +
+                    (ray_to[i][1]-ray_from[i][1]) *
+                    distance/max_distance,
+
+                    ray_from[i][2]
+                ]
+
+                line = p.addUserDebugLine(
+                    ray_from[i],
+                    end,
+                    [1,0,0] if hit != -1 else [0,1,0],
+                    lineWidth=1,
+                    lifeTime=0
+                )
+
+                self.lidar_debug_ids.append(line)
+
+
+        return np.array(lidar)
+
+    def update_pointcloud_map(self, num_rays=360, max_distance=20):
+
+        pos, orn = p.getBasePositionAndOrientation(self.car)
+
+        x, y, z = pos
+        yaw = p.getEulerFromQuaternion(orn)[2]
+
+        lidar = self.get_lidar(
+            num_rays=num_rays,
+            max_distance=max_distance,
+            visualize=False
+        )
+
+        for i, distance in enumerate(lidar):
+
+            # Ignore rays with no obstacle
+            if distance >= max_distance:
+                continue
+
+            angle = yaw + 2 * math.pi * i / num_rays
+
+            px = x + distance * math.cos(angle)
+            py = y + distance * math.sin(angle)
+
+            self.point_cloud.append((px, py))
+
+    def plot_pointcloud(self):
+
+        self.ax.clear()
+
+        if len(self.point_cloud):
+
+            pts = np.array(self.point_cloud)
+
+            self.ax.scatter(
+                pts[:,0],
+                pts[:,1],
+                s=3,
+                c='blue'
+            )
+
+        car_pos, _ = p.getBasePositionAndOrientation(self.car)
+
+        self.ax.scatter(
+            car_pos[0],
+            car_pos[1],
+            c='red',
+            s=80,
+            label='Car'
+        )
+
+        self.ax.set_xlim(-20,20)
+        self.ax.set_ylim(-20,20)
+        self.ax.set_aspect('equal')
+
+        self.ax.set_title("Accumulated LiDAR Point Cloud")
+
+        plt.draw()
+        plt.pause(0.001)
+
     def PID(self):
 
+        lidar = self.get_lidar(
+            num_rays=360,
+            max_distance=20,
+            visualize=False
+        )
         pos, orien = p.getBasePositionAndOrientation(self.car)
 
         rotation = p.getMatrixFromQuaternion(orien)
@@ -272,6 +445,17 @@ class PIDController:
             ]
         )
 
+        if time.time() - self.last_map_update >= self.map_update_period:
+
+            self.update_pointcloud_map(
+                num_rays=360,
+                max_distance=20
+            )
+
+            self.plot_pointcloud()
+
+            self.last_map_update = time.time()
+
     def run(self):
 
         while True:
@@ -283,3 +467,5 @@ class PIDController:
 
 controller = PIDController()
 controller.run()
+
+
