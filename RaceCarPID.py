@@ -7,6 +7,15 @@ import math
 import matplotlib.pyplot as plt
 
 
+def point_to_cell_coordinate(cell_size, x, y):
+
+    x_cell = int(x // cell_size)
+    y_cell = int(y // cell_size)
+
+    return x_cell, y_cell
+
+
+
 p.connect(p.GUI)
 
 p.resetSimulation()
@@ -110,6 +119,7 @@ create_obstacle(
 class PIDController:
 
     def __init__(self):
+        self.point_cloud = []
         self.lidar_debug_ids = []
         self.car = p.loadURDF(
             os.path.join(
@@ -161,8 +171,31 @@ class PIDController:
         # Interactive plotting
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(7,7))
+        # Occupancy grid
 
-    def get_lidar(self, num_rays=72, max_distance=10, visualize=False):
+        self.cell_size = 0.5
+
+        self.grid_size = 80
+
+        self.occupancy_grid = np.zeros(
+            (self.grid_size, self.grid_size)
+        )
+
+        # center map around robot world origin
+        self.origin_x = -20
+        self.origin_y = -20
+
+        self.p_free = 0.35
+        self.p_occ = 0.65
+
+        self.l_occ = 0.25
+        self.l_free = -0.12
+
+        self.l_min = -5
+        self.l_max = 5
+        self.max_distance_rays = 10
+
+    def get_lidar(self, num_rays=70, max_distance= 10, visualize=False):
 
         pos, orn = p.getBasePositionAndOrientation(self.car)
 
@@ -302,6 +335,134 @@ class PIDController:
         self.ax.set_aspect('equal')
 
         self.ax.set_title("Accumulated LiDAR Point Cloud")
+
+        plt.draw()
+        plt.pause(0.001)
+
+    def world_to_grid(self,x,y):
+
+        gx = int((x - self.origin_x) / self.cell_size)
+        gy = int((y - self.origin_y) / self.cell_size)
+
+        return gx, gy
+
+
+
+    def update_occupancy_grid(self):
+
+        pos, orn = p.getBasePositionAndOrientation(self.car)
+
+        x,y,z = pos
+
+        yaw = p.getEulerFromQuaternion(orn)[2]
+
+
+        lidar = self.get_lidar(
+            num_rays=360,
+            max_distance=20,
+            visualize=False
+        )
+
+
+        for i,distance in enumerate(lidar):
+
+
+            angle = yaw + 2*np.pi*i/360
+
+
+            # free cells along ray
+
+            steps = int(distance/self.cell_size)
+
+
+            for s in range(steps):
+
+                rx = x + s*self.cell_size*np.cos(angle)
+                ry = y + s*self.cell_size*np.sin(angle)
+
+
+                gx,gy = self.world_to_grid(rx,ry)
+
+
+                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
+
+
+                    self.occupancy_grid[gx,gy] += self.l_free
+
+
+
+            # occupied endpoint
+
+            if distance < 10:
+
+
+                end_x = x + distance*np.cos(angle)
+                end_y = y + distance*np.sin(angle)
+
+
+                gx,gy = self.world_to_grid(end_x,end_y)
+
+
+                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
+
+
+                    self.occupancy_grid[gx,gy] += self.l_occ
+
+
+
+            # limit values
+
+            self.occupancy_grid = np.clip(
+                self.occupancy_grid,
+                self.l_min,
+                self.l_max
+            )
+    
+    def plot_occupancy_grid(self):
+
+        self.ax.clear()
+
+
+        # Convert log-odds to probability
+        probability_map = 1 / (
+            1 + np.exp(-self.occupancy_grid)
+        )
+
+
+        img = self.ax.imshow(
+            probability_map.T,
+            origin="lower",
+            cmap="gray",
+            vmin=0,
+            vmax=1,
+            extent=[
+                self.origin_x,
+                self.origin_x + self.grid_size*self.cell_size,
+                self.origin_y,
+                self.origin_y + self.grid_size*self.cell_size
+            ]
+        )
+
+
+        # draw robot
+        pos,_ = p.getBasePositionAndOrientation(self.car)
+
+        self.ax.scatter(
+            pos[0],
+            pos[1],
+            c="red",
+            s=50
+        )
+
+
+        self.ax.set_title(
+            "Probabilistic OGM"
+        )
+
+        self.ax.set_aspect(
+            "equal"
+        )
+
 
         plt.draw()
         plt.pause(0.001)
@@ -447,12 +608,8 @@ class PIDController:
 
         if time.time() - self.last_map_update >= self.map_update_period:
 
-            self.update_pointcloud_map(
-                num_rays=360,
-                max_distance=20
-            )
-
-            self.plot_pointcloud()
+            self.update_occupancy_grid()
+            self.plot_occupancy_grid()
 
             self.last_map_update = time.time()
 
@@ -464,7 +621,7 @@ class PIDController:
 
             time.sleep(self.dt)
 
-
+print("All goodie in the hoodie")
 controller = PIDController()
 controller.run()
 
