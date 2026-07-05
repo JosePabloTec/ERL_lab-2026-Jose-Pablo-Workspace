@@ -8,10 +8,10 @@ np.set_printoptions(threshold=np.inf)
 
 # Random occupancy grid
 
-width = 20
-height = 20
+width = 40
+height = 40
 
-p_obstacle = 0.2
+p_obstacle = 0.05
 p_free = 1 - p_obstacle
 
 # 0 = free
@@ -29,7 +29,7 @@ grid[Goal_y, Goal_x] = 0
 
 
 # Inflate obstacles
-Inflate = False
+Inflate = True
 
 def inflate_obstacles(grid, inflation_radius=1):
     structure = np.ones(
@@ -42,6 +42,11 @@ def inflate_obstacles(grid, inflation_radius=1):
 
 
 # Plot the map
+
+
+if Inflate:
+    grid = inflate_obstacles(grid)
+
 plt.figure(figsize=(8, 8))
 plt.imshow(grid, cmap="binary", origin="upper")  # grid
 plt.scatter(Start_x, Start_y, color="blue", s=10, label="Start")  # start
@@ -52,9 +57,11 @@ plt.show()
 
 # A* 
 
-# Heuristic Function (Manhattan Distance)
-def heuristic(x, y, goal_x = Goal_x, goal_y = Goal_y):
-    return abs(x - goal_x) + abs(y - goal_y)
+# Heuristic Function (Octile Distance)
+def heuristic(x, y, goal_x=Goal_x, goal_y=Goal_y):
+    dx = abs(x - goal_x)
+    dy = abs(y - goal_y)
+    return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
 
 
 # Node Class
@@ -82,7 +89,9 @@ open_list = [start]
 closed_set = set()
 
 # Available directions
-directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+directions = [(1, 0), (-1, 0), (0, 1), (0, -1),  # horizontal and vertical
+              (1, 1), (1, -1), (-1, 1), (-1, -1) # diagonal
+]
 
 # nodes dictionary
 nodes = {}  
@@ -129,7 +138,12 @@ while open_list:
             continue
 
         # cost from start
-        tentative_g = current.g + 1
+        if dx != 0 and dy != 0:
+            step_cost = math.sqrt(2)
+        else:
+            step_cost = 1
+
+        tentative_g = current.g + step_cost
 
         # get or create node
         neighbor = get_node(nx, ny)
@@ -208,8 +222,8 @@ def run_astar_visual():
         img[current.y, current.x] = [0, 0, 1]
 
         # start / goal override colors
-        img[start.y, start.x] = [0, 1, 0]
-        img[goal.y, goal.x] = [0.5, 0, 0.5]
+        img[start.y, start.x] = [0, 0, 1]
+        img[goal.y, goal.x] = [0, 0, 1]
 
     current = None
 
@@ -243,7 +257,11 @@ def run_astar_visual():
 
             neighbor = get_node(nx, ny)
 
-            tentative_g = current.g + 1
+            if dx != 0 and dy != 0:
+                step_cost = math.sqrt(2)
+            else:
+                step_cost = 1
+            tentative_g = current.g + step_cost
 
             if tentative_g < neighbor.g:
                 neighbor.parent = current
@@ -260,7 +278,7 @@ def run_astar_visual():
         ax.imshow(img, origin="upper")
         ax.set_xticks([])
         ax.set_yticks([])
-        plt.pause(0.01)
+        plt.pause(0.0001)
 
     plt.show()
 
