@@ -3,15 +3,17 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
 import time
 import math
+import heapq
+from itertools import count
 
 np.set_printoptions(threshold=np.inf)
 
 # Random occupancy grid
 
-width = 40
-height = 40
+width = 300
+height = 300
 
-p_obstacle = 0.05
+p_obstacle = 0.03
 p_free = 1 - p_obstacle
 
 # 0 = free
@@ -76,6 +78,25 @@ class Node:
 
         self.parent = None
 
+counter = count()
+
+# ----------------------------
+# NODE HELPERS
+# ----------------------------
+nodes = {}
+
+def get_node(x, y):
+    if (x, y) not in nodes:
+        nodes[(x, y)] = Node(x, y)
+    return nodes[(x, y)]
+
+DIAG_COST = math.sqrt(2)
+
+directions = [
+    (1, 0), (-1, 0), (0, 1), (0, -1),
+    (1, 1), (1, -1), (-1, 1), (-1, -1)
+]
+
 # Initialize Start Node
 start = Node(Start_x, Start_y)
 goal = Node(Goal_x, Goal_y)
@@ -84,166 +105,156 @@ start.g = 0
 start.h = heuristic(start.x , start.y)
 start.f = start.g + start.h
 
-# Open and closed sets
-open_list = [start]
-closed_set = set()
+# ============================================================
+# STANDARD A*
+# ============================================================
 
-# Available directions
-directions = [(1, 0), (-1, 0), (0, 1), (0, -1),  # horizontal and vertical
-              (1, 1), (1, -1), (-1, 1), (-1, -1) # diagonal
-]
+def run_astar():
 
-# nodes dictionary
-nodes = {}  
-
-# Function to acces old nodes or create new ones
-def get_node(x, y):
-    if (x, y) not in nodes:
-        nodes[(x, y)] = Node(x, y)
-    return nodes[(x, y)]
-
-# Insert the start node
-nodes[(start.x, start.y)] = start
-
-while open_list:
-
-    # 1. pick node with lowest f
-    current = min(open_list, key=lambda n: (n.f, n.h))
-
-    # 2. goal check
-    if current.x == Goal_x and current.y == Goal_y:
-        print("Goal reached!")
-        break
-
-    # 3. move current from open → closed
-    open_list.remove(current)
-    closed_set.add((current.x, current.y))
-
-    # 4. explore neighbors
-    for dx, dy in directions:
-
-        nx = current.x + dx
-        ny = current.y + dy
-
-        # bounds
-        if nx < 0 or nx >= width or ny < 0 or ny >= height:
-            continue
-
-        # obstacle
-        if grid[ny, nx] == 1:
-            continue
-
-        # already processed
-        if (nx, ny) in closed_set:
-            continue
-
-        # cost from start
-        if dx != 0 and dy != 0:
-            step_cost = math.sqrt(2)
-        else:
-            step_cost = 1
-
-        tentative_g = current.g + step_cost
-
-        # get or create node
-        neighbor = get_node(nx, ny)
-
-        # only update if better path found
-        if tentative_g < neighbor.g:
-
-            neighbor.parent = current
-            neighbor.g = tentative_g
-            neighbor.h = heuristic(nx, ny)
-            neighbor.f = neighbor.g + neighbor.h
-
-            if neighbor not in open_list:
-                open_list.append(neighbor)
-
-
-path = []
-
-if (Goal_x, Goal_y) in nodes:
-    current = nodes[(Goal_x, Goal_y)]
-
-    while current is not None:
-        path.append((current.x, current.y))
-        current = current.parent
-
-    path.reverse()
-
-
-plt.figure(figsize=(8, 8))
-plt.imshow(grid, cmap="binary", origin="upper")
-
-if path:
-    xs = [p[0] for p in path]
-    ys = [p[1] for p in path]
-    plt.plot(xs, ys, color="blue", linewidth=2)
-
-plt.scatter(Start_x, Start_y, color="blue", s=50)
-plt.scatter(Goal_x, Goal_y, color="red", s=50)
-
-plt.title("A* Path")
-plt.show()
-
-nodes = {}
-
-def run_astar_visual():
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    directions = [(1,0), (-1,0), (0,1), (0,-1)]
-
-    open_list = [start]
+    open_heap = []
     closed_set = set()
+
+    start = Node(Start_x, Start_y)
+    goal = Node(Goal_x, Goal_y)
 
     start.g = 0
     start.h = heuristic(start.x, start.y)
     start.f = start.g + start.h
 
-    # color map image (RGB)
+    nodes[(start.x, start.y)] = start
+
+    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+
+    while open_heap:
+
+        _, _, _, current = heapq.heappop(open_heap)
+
+        if (current.x, current.y) in closed_set:
+            continue
+
+        if current.x == Goal_x and current.y == Goal_y:
+            print("Goal reached!")
+            break
+
+        closed_set.add((current.x, current.y))
+
+        for dx, dy in directions:
+
+            nx, ny = current.x + dx, current.y + dy
+
+            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+                continue
+
+            if grid[ny, nx] == 1:
+                continue
+
+            if (nx, ny) in closed_set:
+                continue
+
+            step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
+            tentative_g = current.g + step_cost
+
+            neighbor = get_node(nx, ny)
+
+            if tentative_g < neighbor.g:
+
+                neighbor.parent = current
+                neighbor.g = tentative_g
+                neighbor.h = heuristic(nx, ny)
+                neighbor.f = neighbor.g + neighbor.h
+
+                heapq.heappush(
+                    open_heap,
+                    (neighbor.f, neighbor.h, next(counter), neighbor)
+                )
+
+    # ----------------------------
+    # reconstruct path
+    # ----------------------------
+    path = []
+    if (Goal_x, Goal_y) in nodes:
+        node = nodes[(Goal_x, Goal_y)]
+        while node:
+            path.append((node.x, node.y))
+            node = node.parent
+        path.reverse()
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(grid, cmap="binary", origin="upper")
+
+    if path:
+        xs = [p[0] for p in path]
+        ys = [p[1] for p in path]
+        plt.plot(xs, ys, color="blue")
+
+    plt.scatter(Start_x, Start_y, c="blue")
+    plt.scatter(Goal_x, Goal_y, c="red")
+
+    plt.title("A* Path")
+    plt.show()
+
+
+# ============================================================
+# VISUAL A*
+# ============================================================
+
+def run_astar_visual():
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    open_heap = []
+    closed_set = set()
+    nodes = {}
+
+    def get_node(x, y):
+        if (x, y) not in nodes:
+            nodes[(x, y)] = Node(x, y)
+        return nodes[(x, y)]
+
+    start.g = 0
+    start.h = heuristic(start.x, start.y)
+    start.f = start.g + start.h
+
+    nodes[(start.x, start.y)] = start
+
+    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+
     img = np.zeros((grid.shape[0], grid.shape[1], 3), dtype=float)
 
-    def update_img():
-        # reset
-        img[:, :] = [1, 1, 1]  # white background
+    def update_img(current=None):
 
-        # obstacles
-        img[grid == 1] = [0, 0, 0]  # black
+        img[:, :] = [1, 1, 1]
+        img[grid == 1] = [0, 0, 0]
 
-        # closed set (red)
         for x, y in closed_set:
             img[y, x] = [1, 0, 0]
 
-        # open set (yellow)
-        for n in open_list:
+        for _, _, _, n in open_heap:
             img[n.y, n.x] = [1, 1, 0]
 
-        # current node (blue)
-        img[current.y, current.x] = [0, 0, 1]
+        if current:
+            img[current.y, current.x] = [0, 0, 1]
 
-        # start / goal override colors
         img[start.y, start.x] = [0, 0, 1]
-        img[goal.y, goal.x] = [0, 0, 1]
+        img[goal.y, goal.x] = [0, 1, 0]
 
-    current = None
+    while open_heap:
 
-    while open_list:
+        _, _, _, current = heapq.heappop(open_heap)
 
-        # pick best node
-        current = min(open_list, key=lambda n: n.f)
+        if (current.x, current.y) in closed_set:
+            continue
 
-        open_list.remove(current)
         closed_set.add((current.x, current.y))
 
-        # goal check
         if current.x == goal.x and current.y == goal.y:
-            update_img()
+            update_img(current)
             ax.imshow(img, origin="upper")
             plt.pause(0.01)
             break
 
-        # expand neighbors
         for dx, dy in directions:
+
             nx, ny = current.x + dx, current.y + dy
 
             if nx < 0 or nx >= grid.shape[1] or ny < 0 or ny >= grid.shape[0]:
@@ -255,25 +266,25 @@ def run_astar_visual():
             if (nx, ny) in closed_set:
                 continue
 
-            neighbor = get_node(nx, ny)
-
-            if dx != 0 and dy != 0:
-                step_cost = math.sqrt(2)
-            else:
-                step_cost = 1
+            step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
             tentative_g = current.g + step_cost
 
+            neighbor = get_node(nx, ny)
+
             if tentative_g < neighbor.g:
+
                 neighbor.parent = current
                 neighbor.g = tentative_g
                 neighbor.h = heuristic(nx, ny)
                 neighbor.f = neighbor.g + neighbor.h
 
-                if neighbor not in open_list:
-                    open_list.append(neighbor)
+                heapq.heappush(
+                    open_heap,
+                    (neighbor.f, neighbor.h, next(counter), neighbor)
+                )
 
-        # redraw frame
-        update_img()
+        update_img(current)
+
         ax.clear()
         ax.imshow(img, origin="upper")
         ax.set_xticks([])
@@ -283,4 +294,8 @@ def run_astar_visual():
     plt.show()
 
 
+# ----------------------------
+# run
+# ----------------------------
+run_astar()
 run_astar_visual()
