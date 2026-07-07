@@ -5,6 +5,52 @@ import time
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+from scipy.ndimage import binary_dilation
+import heapq
+from itertools import count
+
+width = 30 
+height = 30
+cell_size = 1
+p_obstacle = 0.04
+p_free = 1 - p_obstacle
+grid = np.random.choice([0, 1], size=(height, width), p=[p_free, p_obstacle])
+
+Start_x = 0    #initial cell x coordinate
+Start_y = 0    #initial cell y coordinate
+Goal_x = width - 1
+Goal_y = height - 1
+grid[Start_y, Start_x] = 0
+grid[Goal_y, Goal_x] = 0
+
+def calculate_origin():
+    x_0 = -width/2 * cell_size + cell_size/2 + Start_x*cell_size
+    y_0 = height/2 * cell_size - cell_size/2 - Start_y*cell_size
+    return x_0,y_0
+
+def calculate_cell_center(x,y):
+    x = -width/2 * cell_size + cell_size/2 + x*cell_size
+    y = height/2 * cell_size - cell_size/2 - y*cell_size
+    return x,y 
+
+# Inflate obstacles
+Inflate = True
+
+def inflate_obstacles(grid, inflation_radius=1):
+    structure = np.ones(
+        (2 * inflation_radius + 1,
+         2 * inflation_radius + 1),
+        dtype=bool
+    )
+    inflated = binary_dilation(grid, structure=structure)
+    return inflated.astype(int)
+
+plt.figure(figsize=(8, 8))
+plt.imshow(grid, cmap="binary", origin="upper")  # grid
+plt.scatter(Start_x, Start_y, color="blue", s=10, label="Start")  # start
+plt.scatter(Goal_x, Goal_y, color="red", s=10, label="Goal")       # end
+plt.title("Occupancy Grid")  
+plt.show()
 
 
 def point_to_cell_coordinate(cell_size, x, y):
@@ -21,9 +67,9 @@ p.resetSimulation()
 p.setGravity(0, 0, -10)
 p.setRealTimeSimulation(0)
 p.resetDebugVisualizerCamera(
-    cameraDistance=15,
+    cameraDistance=25,
     cameraYaw=0,
-    cameraPitch=-35,
+    cameraPitch=-85,
     cameraTargetPosition=[0, 0, 0]
 )
 
@@ -87,40 +133,188 @@ def create_obstacle(
     return obstacle
 
 
-create_obstacle(
-    x=0.5,
-    y=3.5,
-    width=1,
-    length=1,
-    height=1
-)
+for row in range(grid.shape[0]):
+    for col in range(grid.shape[1]):
+        if grid[row, col] == 1:
+            x, y = calculate_cell_center(col, row)
 
-create_obstacle(
-    x=-7,
-    y= 7,
-    width=1,
-    length=1,
-    height=1
-)
+            create_obstacle(
+                x=x,
+                y=y,
+                width=cell_size,
+                length=cell_size,
+                height=cell_size
+            )
 
-create_obstacle(
-    x=-2,
-    y=-4,
-    width=1,
-    length=1,
-    height=1
-)
+
+if Inflate:
+    grid = inflate_obstacles(grid)
+
+
+##############################################################
+# A* 
+
+# Heuristic Function (Octile Distance)
+def heuristic(x, y, goal_x=Goal_x, goal_y=Goal_y):
+    dx = abs(x - goal_x)
+    dy = abs(y - goal_y)
+    return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
+
+
+# Node Class
+class Node:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+        self.g = float("inf")
+        self.h = 0
+        self.f = float("inf")
+
+        self.parent = None
+
+counter = count()
+
+# NODE HELPERS
+nodes = {}
+
+def get_node(x, y):
+    if (x, y) not in nodes:
+        nodes[(x, y)] = Node(x, y)
+    return nodes[(x, y)]
+
+DIAG_COST = math.sqrt(2)
+
+directions = [
+    (1, 0), (-1, 0), (0, 1), (0, -1),
+    (1, 1), (1, -1), (-1, 1), (-1, -1)
+]
+
+# Initialize Start Node
+start = Node(Start_x, Start_y)
+goal = Node(Goal_x, Goal_y)
+
+start.g = 0
+start.h = heuristic(start.x , start.y)
+start.f = start.g + start.h
+
+# Open and closed sets
+open_list = [start]
+open_set = set()
+closed_set = set()
+
+def run_astar_v2():
+
+    open_heap = []
+    closed_set = set()
+
+    start = Node(Start_x, Start_y)
+    goal = Node(Goal_x, Goal_y)
+
+    start.g = 0
+    start.h = heuristic(start.x, start.y)
+    start.f = start.g + start.h
+
+    nodes[(start.x, start.y)] = start
+
+    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+
+    while open_heap:
+
+        _, _, _, current = heapq.heappop(open_heap)
+
+        if (current.x, current.y) in closed_set:
+            continue
+
+        if current.x == Goal_x and current.y == Goal_y:
+            print("Goal reached!")
+            break
+
+        closed_set.add((current.x, current.y))
+
+        for dx, dy in directions:
+
+            nx, ny = current.x + dx, current.y + dy
+
+            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+                continue
+
+            if grid[ny, nx] == 1:
+                continue
+
+            if (nx, ny) in closed_set:
+                continue
+
+            step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
+            tentative_g = current.g + step_cost
+
+            neighbor = get_node(nx, ny)
+
+            if tentative_g < neighbor.g:
+
+                neighbor.parent = current
+                neighbor.g = tentative_g
+                neighbor.h = heuristic(nx, ny)
+                neighbor.f = neighbor.g + neighbor.h
+
+                heapq.heappush(
+                    open_heap,
+                    (neighbor.f, neighbor.h, next(counter), neighbor)
+                )
+
+    # reconstruct path
+    path = []
+    if (Goal_x, Goal_y) in nodes:
+        node = nodes[(Goal_x, Goal_y)]
+        while node:
+            path.append((node.x, node.y))
+            node = node.parent
+        path.reverse()
+
+    # Convert grid cells to world coordinates
+    goal_list = []
+
+    for grid_x, grid_y in path:
+        world_x, world_y = calculate_cell_center(grid_x, grid_y)
+        goal_list.append([world_x, world_y])
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(grid, cmap="binary", origin="upper")
+
+    if path:
+        xs = [p[0] for p in path]
+        ys = [p[1] for p in path]
+        plt.plot(xs, ys, color="blue")
+
+    plt.scatter(Start_x, Start_y, c="blue")
+    plt.scatter(Goal_x, Goal_y, c="red")
+
+    plt.title("A* Path FAST")
+    plt.show()
+
+    return goal_list
+
+##############################################################
+
+
+
+
+
+
+
 
 
 class PIDController:
 
     def __init__(self):
-
+        x_initial,y_initial = calculate_origin()
         self.car = p.loadURDF(
             os.path.join(
                 pybullet_data.getDataPath(),
                 "racecar/racecar.urdf"
-            )
+            ),
+            basePosition=[x_initial, y_initial, 0],
+            baseOrientation=p.getQuaternionFromEuler([0, 0, 0])
         )
 
         self.tol = 5e-3
@@ -128,7 +322,7 @@ class PIDController:
         # -----------------------
         # Goal list
         # -----------------------
-        self.goal_list = [[3,0], [3,-3], [0,0]]
+        self.goal_list = run_astar_v2()
         self.goal_index = 0
 
         self.x = self.goal_list[self.goal_index][0]
@@ -137,14 +331,15 @@ class PIDController:
         self.target_location = np.array([self.x, self.y])
 
         # PID gains
-        self.k1 = 3.029052003
-        self.k2 = 4.507840493
-
-        self.k11 = 0.2
+        # P
+        self.k1 = 20
+        self.k2 = 25
+        # D
+        self.k11 = 0.22
         self.k22 = 0.2
-
-        self.k111 = 0.03
-        self.k222 = 0.001
+        #I
+        self.k111 = 0.08
+        self.k222 = 0.03
 
         self.previous_d = 0
         self.previous_dtheta = 0
