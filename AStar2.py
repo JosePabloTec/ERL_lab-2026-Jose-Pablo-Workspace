@@ -5,15 +5,18 @@ import time
 import math
 import heapq
 from itertools import count
+from pqdict import pqdict
+from PIL import Image
+import io
 
 np.set_printoptions(threshold=np.inf)
 
 # Random occupancy grid
 
-width = 30
-height = 30
+width = 60
+height = 60
 
-p_obstacle = 0.03
+p_obstacle = 0.04
 p_free = 1 - p_obstacle
 
 # 0 = free
@@ -83,6 +86,8 @@ counter = count()
 # NODE HELPERS
 nodes = {}
 
+
+# this function helps A* access existing nodes or creates a new one
 def get_node(x, y):
     if (x, y) not in nodes:
         nodes[(x, y)] = Node(x, y)
@@ -296,66 +301,65 @@ def run_astar_visual_v1():
 
 
 
-# STANDARD A* Priority List - Based
+# STANDARD A* Priority Queue Dictionary - Based
 
 def run_astar_v2():
 
-    open_heap = []
+    nodes.clear()
+
+    open_set = pqdict()
     closed_set = set()
 
     start = Node(Start_x, Start_y)
-    goal = Node(Goal_x, Goal_y)
 
     start.g = 0
-    start.h = heuristic(start.x, start.y)
+    start.h = heuristic(Start_x, Start_y)
     start.f = start.g + start.h
 
-    nodes[(start.x, start.y)] = start
+    nodes[(Start_x, Start_y)] = start
+    open_set[(Start_x, Start_y)] = (start.f, start.h)
 
-    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+    while open_set:
 
-    while open_heap:
+        (cx, cy), (cf, ch) = open_set.popitem()  # cx = current x, cy = current y, cf = current f, ch = current h
+        current = nodes[(cx, cy)]
 
-        _, _, _, current = heapq.heappop(open_heap)
-
-        if (current.x, current.y) in closed_set:
-            continue
-
-        if current.x == Goal_x and current.y == Goal_y:
-            print("Goal reached!")
+        if (cx, cy) == (Goal_x, Goal_y):   # check if goal was reached
             break
 
-        closed_set.add((current.x, current.y))
+        closed_set.add((cx, cy))           # add to the closed set to prevent processing it again
 
         for dx, dy in directions:
 
-            nx, ny = current.x + dx, current.y + dy
+            nx = cx + dx
+            ny = cy + dy
 
-            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+            if nx < 0 or nx >= width or ny < 0 or ny >= height: # invalid, cause it's out of bounds
                 continue
 
-            if grid[ny, nx] == 1:
+            if grid[ny, nx] == 1:         # invalid, cause there's an obstacle    
                 continue
 
-            if (nx, ny) in closed_set:
+            if (nx, ny) in closed_set:    # invalid, cause it was already processed
                 continue
 
-            step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
-            tentative_g = current.g + step_cost
+            if dx == 1 and dy == 1:       # calculate cost to reach neighbor
+                cost = DIAG_COST 
+            else:
+                cost = 1
 
-            neighbor = get_node(nx, ny)
+            tentative_g = current.g + cost  # calculate a potentially better g cost
 
-            if tentative_g < neighbor.g:
+            neighbor = get_node(nx, ny)     
+
+            if tentative_g < neighbor.g:   
 
                 neighbor.parent = current
                 neighbor.g = tentative_g
                 neighbor.h = heuristic(nx, ny)
                 neighbor.f = neighbor.g + neighbor.h
 
-                heapq.heappush(
-                    open_heap,
-                    (neighbor.f, neighbor.h, next(counter), neighbor)
-                )
+                open_set[(nx, ny)] = (neighbor.f, neighbor.h)
 
     # reconstruct path
     path = []
@@ -377,7 +381,7 @@ def run_astar_v2():
     plt.scatter(Start_x, Start_y, c="blue")
     plt.scatter(Goal_x, Goal_y, c="red")
 
-    plt.title("A* Path FAST")
+    plt.title("A* Search")
     plt.show()
 
 
@@ -385,11 +389,13 @@ def run_astar_v2():
 
 def run_astar_visual_v2():
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
 
     open_heap = []
     closed_set = set()
     nodes = {}
+
+    frames = []
 
     def get_node(x, y):
         if (x, y) not in nodes:
@@ -402,26 +408,65 @@ def run_astar_visual_v2():
 
     nodes[(start.x, start.y)] = start
 
-    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+    heapq.heappush(
+        open_heap,
+        (start.f, start.h, next(counter), start)
+    )
 
     img = np.zeros((grid.shape[0], grid.shape[1], 3), dtype=float)
 
     def update_img(current=None):
 
         img[:, :] = [1, 1, 1]
+
+        # obstacles
         img[grid == 1] = [0, 0, 0]
 
+        # explored nodes
         for x, y in closed_set:
             img[y, x] = [1, 0, 0]
 
+        # frontier
         for _, _, _, n in open_heap:
             img[n.y, n.x] = [1, 1, 0]
 
+        # current node
         if current:
             img[current.y, current.x] = [0, 0, 1]
 
+        # start and goal
         img[start.y, start.x] = [0, 0, 1]
         img[goal.y, goal.x] = [0, 1, 0]
+
+
+    def save_frame():
+
+        ax.clear()
+        ax.imshow(
+            img,
+            origin="upper",
+            interpolation="nearest"
+        )
+
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        plt.tight_layout(pad=0)
+
+        buffer = io.BytesIO()
+        fig.savefig(
+            buffer,
+            format="png",
+            bbox_inches="tight",
+            pad_inches=0,
+            dpi=200
+        )
+
+        buffer.seek(0)
+        frame = Image.open(buffer).convert("RGB")
+
+        frames.append(frame)
+
 
     while open_heap:
 
@@ -432,17 +477,24 @@ def run_astar_visual_v2():
 
         closed_set.add((current.x, current.y))
 
+
         if current.x == goal.x and current.y == goal.y:
+
             update_img(current)
-            ax.imshow(img, origin="upper")
-            plt.pause(0.01)
+            save_frame()
+
             break
+
 
         for dx, dy in directions:
 
-            nx, ny = current.x + dx, current.y + dy
+            nx = current.x + dx
+            ny = current.y + dy
 
-            if nx < 0 or nx >= grid.shape[1] or ny < 0 or ny >= grid.shape[0]:
+            if nx < 0 or nx >= grid.shape[1]:
+                continue
+
+            if ny < 0 or ny >= grid.shape[0]:
                 continue
 
             if grid[ny, nx] == 1:
@@ -451,10 +503,13 @@ def run_astar_visual_v2():
             if (nx, ny) in closed_set:
                 continue
 
+
             step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
+
             tentative_g = current.g + step_cost
 
             neighbor = get_node(nx, ny)
+
 
             if tentative_g < neighbor.g:
 
@@ -465,18 +520,34 @@ def run_astar_visual_v2():
 
                 heapq.heappush(
                     open_heap,
-                    (neighbor.f, neighbor.h, next(counter), neighbor)
+                    (
+                        neighbor.f,
+                        neighbor.h,
+                        next(counter),
+                        neighbor
+                    )
                 )
 
+
         update_img(current)
+        save_frame()
 
-        ax.clear()
-        ax.imshow(img, origin="upper")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        plt.pause(0.0001)
 
-    plt.show()
+    # Save GIF
+    save_path = r"C:\ERL\Figs\astar_visualization.gif"
+
+    frames[0].save(
+        save_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=40,     # milliseconds per frame (~25 FPS)
+        loop=0,
+        optimize=False
+    )
+
+    print(f"GIF saved to: {save_path}")
+
+    plt.close(fig)
 
 
 # ----------------------------
