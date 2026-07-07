@@ -17,13 +17,9 @@ def point_to_cell_coordinate(cell_size, x, y):
 
 
 p.connect(p.GUI)
-
 p.resetSimulation()
-
 p.setGravity(0, 0, -10)
-
-p.setRealTimeSimulation(1)
-
+p.setRealTimeSimulation(0)
 p.resetDebugVisualizerCamera(
     cameraDistance=15,
     cameraYaw=0,
@@ -92,10 +88,10 @@ def create_obstacle(
 
 
 create_obstacle(
-    x=5,
-    y=5,
-    width=3,
-    length=2,
+    x=0.5,
+    y=3.5,
+    width=1,
+    length=1,
     height=1
 )
 
@@ -119,8 +115,7 @@ create_obstacle(
 class PIDController:
 
     def __init__(self):
-        self.point_cloud = []
-        self.lidar_debug_ids = []
+
         self.car = p.loadURDF(
             os.path.join(
                 pybullet_data.getDataPath(),
@@ -130,13 +125,19 @@ class PIDController:
 
         self.tol = 5e-3
 
-        self.x = float(input("Target X: "))
-        self.y = float(input("Target Y: "))
+        # -----------------------
+        # Goal list
+        # -----------------------
+        self.goal_list = [[3,0], [3,-3], [0,0]]
+        self.goal_index = 0
+
+        self.x = self.goal_list[self.goal_index][0]
+        self.y = self.goal_list[self.goal_index][1]
 
         self.target_location = np.array([self.x, self.y])
 
         # PID gains
-        self.k1 = 1.029052003
+        self.k1 = 3.029052003
         self.k2 = 4.507840493
 
         self.k11 = 0.2
@@ -151,7 +152,7 @@ class PIDController:
         self.integral_d = 0
         self.integral_theta = 0
 
-        self.dt = 0.01
+        self.dt = 0.001
 
         # -----------------------
         # State machine
@@ -161,321 +162,10 @@ class PIDController:
         self.turn_threshold = math.radians(5)
         self.return_to_turn_threshold = math.radians(10)
 
-        # Global point cloud
-        self.point_cloud = []
-
-        # Update every 0.5 s
-        self.map_update_period = 0.5
-        self.last_map_update = time.time()
-
-        # Interactive plotting
-        plt.ion()
-        self.fig, self.ax = plt.subplots(figsize=(7,7))
-        # Occupancy grid
-
-        self.cell_size = 0.5
-
-        self.grid_size = 80
-
-        self.occupancy_grid = np.zeros(
-            (self.grid_size, self.grid_size)
-        )
-
-        # center map around robot world origin
-        self.origin_x = -20
-        self.origin_y = -20
-
-        self.p_free = 0.35
-        self.p_occ = 0.65
-
-        self.l_occ = 0.25
-        self.l_free = -0.12
-
-        self.l_min = -5
-        self.l_max = 5
-        self.max_distance_rays = 10
-
-    def get_lidar(self, num_rays=70, max_distance= 10, visualize=False):
-
-        pos, orn = p.getBasePositionAndOrientation(self.car)
-
-        x, y, z = pos
-
-        yaw = p.getEulerFromQuaternion(orn)[2]
-
-        ray_from = []
-        ray_to = []
-
-        for i in range(num_rays):
-
-            angle = yaw + 2 * math.pi * i / num_rays
-
-            ray_from.append([
-                x,
-                y,
-                z + 0.2
-            ])
-
-            ray_to.append([
-                x + max_distance * math.cos(angle),
-                y + max_distance * math.sin(angle),
-                z + 0.2
-            ])
-
-
-        results = p.rayTestBatch(
-            ray_from,
-            ray_to
-        )
-
-        lidar = []
-
-        # remove old lines
-        if visualize:
-            for line in self.lidar_debug_ids:
-                p.removeUserDebugItem(line)
-
-            self.lidar_debug_ids = []
-
-
-        for i, result in enumerate(results):
-
-            hit = result[0]
-            fraction = result[2]
-
-            distance = (
-                fraction * max_distance
-                if hit != -1
-                else max_distance
-            )
-
-            lidar.append(distance)
-
-
-            if visualize:
-
-                end = [
-                    ray_from[i][0] +
-                    (ray_to[i][0]-ray_from[i][0]) *
-                    distance/max_distance,
-
-                    ray_from[i][1] +
-                    (ray_to[i][1]-ray_from[i][1]) *
-                    distance/max_distance,
-
-                    ray_from[i][2]
-                ]
-
-                line = p.addUserDebugLine(
-                    ray_from[i],
-                    end,
-                    [1,0,0] if hit != -1 else [0,1,0],
-                    lineWidth=1,
-                    lifeTime=0
-                )
-
-                self.lidar_debug_ids.append(line)
-
-
-        return np.array(lidar)
-
-    def update_pointcloud_map(self, num_rays=360, max_distance=20):
-
-        pos, orn = p.getBasePositionAndOrientation(self.car)
-
-        x, y, z = pos
-        yaw = p.getEulerFromQuaternion(orn)[2]
-
-        lidar = self.get_lidar(
-            num_rays=num_rays,
-            max_distance=max_distance,
-            visualize=False
-        )
-
-        for i, distance in enumerate(lidar):
-
-            # Ignore rays with no obstacle
-            if distance >= max_distance:
-                continue
-
-            angle = yaw + 2 * math.pi * i / num_rays
-
-            px = x + distance * math.cos(angle)
-            py = y + distance * math.sin(angle)
-
-            self.point_cloud.append((px, py))
-
-    def plot_pointcloud(self):
-
-        self.ax.clear()
-
-        if len(self.point_cloud):
-
-            pts = np.array(self.point_cloud)
-
-            self.ax.scatter(
-                pts[:,0],
-                pts[:,1],
-                s=3,
-                c='blue'
-            )
-
-        car_pos, _ = p.getBasePositionAndOrientation(self.car)
-
-        self.ax.scatter(
-            car_pos[0],
-            car_pos[1],
-            c='red',
-            s=80,
-            label='Car'
-        )
-
-        self.ax.set_xlim(-20,20)
-        self.ax.set_ylim(-20,20)
-        self.ax.set_aspect('equal')
-
-        self.ax.set_title("Accumulated LiDAR Point Cloud")
-
-        plt.draw()
-        plt.pause(0.001)
-
-    def world_to_grid(self,x,y):
-
-        gx = int((x - self.origin_x) / self.cell_size)
-        gy = int((y - self.origin_y) / self.cell_size)
-
-        return gx, gy
-
-
-
-    def update_occupancy_grid(self):
-
-        pos, orn = p.getBasePositionAndOrientation(self.car)
-
-        x,y,z = pos
-
-        yaw = p.getEulerFromQuaternion(orn)[2]
-
-
-        lidar = self.get_lidar(
-            num_rays=360,
-            max_distance=20,
-            visualize=False
-        )
-
-
-        for i,distance in enumerate(lidar):
-
-
-            angle = yaw + 2*np.pi*i/360
-
-
-            # free cells along ray
-
-            steps = int(distance/self.cell_size)
-
-
-            for s in range(steps):
-
-                rx = x + s*self.cell_size*np.cos(angle)
-                ry = y + s*self.cell_size*np.sin(angle)
-
-
-                gx,gy = self.world_to_grid(rx,ry)
-
-
-                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
-
-
-                    self.occupancy_grid[gx,gy] += self.l_free
-
-
-
-            # occupied endpoint
-
-            if distance < 10:
-
-
-                end_x = x + distance*np.cos(angle)
-                end_y = y + distance*np.sin(angle)
-
-
-                gx,gy = self.world_to_grid(end_x,end_y)
-
-
-                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
-
-
-                    self.occupancy_grid[gx,gy] += self.l_occ
-
-
-
-            # limit values
-
-            self.occupancy_grid = np.clip(
-                self.occupancy_grid,
-                self.l_min,
-                self.l_max
-            )
-    
-    def plot_occupancy_grid(self):
-
-        self.ax.clear()
-
-
-        # Convert log-odds to probability
-        probability_map = 1 / (
-            1 + np.exp(-self.occupancy_grid)
-        )
-
-
-        img = self.ax.imshow(
-            probability_map.T,
-            origin="lower",
-            cmap="gray",
-            vmin=0,
-            vmax=1,
-            extent=[
-                self.origin_x,
-                self.origin_x + self.grid_size*self.cell_size,
-                self.origin_y,
-                self.origin_y + self.grid_size*self.cell_size
-            ]
-        )
-
-
-        # draw robot
-        pos,_ = p.getBasePositionAndOrientation(self.car)
-
-        self.ax.scatter(
-            pos[0],
-            pos[1],
-            c="red",
-            s=50
-        )
-
-
-        self.ax.set_title(
-            "Probabilistic OGM"
-        )
-
-        self.ax.set_aspect(
-            "equal"
-        )
-
-
-        plt.draw()
-        plt.pause(0.001)
 
     def PID(self):
 
-        lidar = self.get_lidar(
-            num_rays=360,
-            max_distance=20,
-            visualize=False
-        )
         pos, orien = p.getBasePositionAndOrientation(self.car)
-
         rotation = p.getMatrixFromQuaternion(orien)
 
         x_current = pos[0]
@@ -512,6 +202,7 @@ class PIDController:
             dtheta - self.previous_dtheta
         ) / self.dt
 
+
         pid_linear = (
             self.k1 * d +
             self.k111 * self.integral_d +
@@ -524,8 +215,10 @@ class PIDController:
             self.k22 * derivative_theta
         )
 
+
         self.previous_d = d
         self.previous_dtheta = dtheta
+
 
         # -----------------------
         # State machine
@@ -539,6 +232,7 @@ class PIDController:
             if abs(dtheta) < self.turn_threshold:
                 self.state = "GO"
 
+
         elif self.state == "GO":
 
             linear_speed = pid_linear
@@ -546,6 +240,8 @@ class PIDController:
 
             if abs(dtheta) > self.return_to_turn_threshold:
                 self.state = "TURN"
+
+
 
         # -----------------------
         # Goal reached
@@ -555,10 +251,27 @@ class PIDController:
 
             print("Goal reached!")
 
-            self.x = float(input("Target X: "))
-            self.y = float(input("Target Y: "))
+            self.goal_index += 1
 
-            self.target_location = np.array([self.x, self.y])
+            if self.goal_index >= len(self.goal_list):
+
+                print("All goals completed!")
+
+                p.resetBaseVelocity(
+                    self.car,
+                    linearVelocity=[0,0,0],
+                    angularVelocity=[0,0,0]
+                )
+
+                return
+
+
+            self.x = self.goal_list[self.goal_index][0]
+            self.y = self.goal_list[self.goal_index][1]
+
+            self.target_location = np.array(
+                [self.x, self.y]
+            )
 
             self.state = "TURN"
 
@@ -570,19 +283,30 @@ class PIDController:
 
             return
 
+
+
         print(f"State: {self.state}")
+        print(f"Current Goal: {self.goal_list[self.goal_index]}")
 
         print("Position:")
-        print(f"x: {pos[0]:.2f}, y: {pos[1]:.2f}, z: {pos[2]:.2f}")
+        print(
+            f"x: {pos[0]:.2f}, "
+            f"y: {pos[1]:.2f}, "
+            f"z: {pos[2]:.2f}"
+        )
 
         print("Orientation:")
+
+        euler = p.getEulerFromQuaternion(orien)
+
         print(
-            f"roll: {p.getEulerFromQuaternion(orien)[0]:.2f}, "
-            f"pitch: {p.getEulerFromQuaternion(orien)[1]:.2f}, "
-            f"yaw: {p.getEulerFromQuaternion(orien)[2]:.2f}"
+            f"roll: {euler[0]:.2f}, "
+            f"pitch: {euler[1]:.2f}, "
+            f"yaw: {euler[2]:.2f}"
         )
 
         print("----------------------")
+
 
         forward = [
             rotation[0],
@@ -590,11 +314,13 @@ class PIDController:
             rotation[6]
         ]
 
+
         velocity = [
             forward[0] * linear_speed,
             forward[1] * linear_speed,
             0
         ]
+
 
         p.resetBaseVelocity(
             self.car,
@@ -606,23 +332,26 @@ class PIDController:
             ]
         )
 
-        if time.time() - self.last_map_update >= self.map_update_period:
 
-            self.update_occupancy_grid()
-            self.plot_occupancy_grid()
-
-            self.last_map_update = time.time()
 
     def run(self):
 
         while True:
 
+            start = time.time()
+
+            p.stepSimulation()
+
             self.PID()
 
-            time.sleep(self.dt)
+            elapsed = time.time() - start
+
+            time.sleep(
+                max(0.0, self.dt - elapsed)
+            )
+
+
 
 print("All goodie in the hoodie")
 controller = PIDController()
 controller.run()
-
-
