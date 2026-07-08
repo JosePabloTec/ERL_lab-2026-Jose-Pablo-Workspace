@@ -36,14 +36,26 @@ grid[Goal_y, Goal_x] = 0
 # Inflate obstacles
 Inflate = True
 
-def inflate_obstacles(grid, inflation_radius=1):
-    structure = np.ones(
-        (2 * inflation_radius + 1,
-         2 * inflation_radius + 1),
-        dtype=bool
-    )
-    inflated = binary_dilation(grid, structure=structure)
-    return inflated.astype(int)
+def inflate_obstacles(grid, inflation_radius=1):  #expland 1 in all directions
+    inflated = grid.copy()
+
+    rows, cols = grid.shape
+
+    for y in range(rows):
+        for x in range(cols):
+
+            if grid[y, x] == 1:  # if we find an obstacle:
+
+                for dy in range(-inflation_radius, inflation_radius + 1): # move in all directions
+                    for dx in range(-inflation_radius, inflation_radius + 1): # move in all directions
+
+                        ny = y + dy
+                        nx = x + dx
+
+                        if 0 <= ny < rows and 0 <= nx < cols: #if it's withing the bounds, change to 1
+                            inflated[ny, nx] = 1
+
+    return inflated
 
 
 # Plot the map
@@ -66,7 +78,7 @@ plt.show()
 def heuristic(x, y, goal_x=Goal_x, goal_y=Goal_y):
     dx = abs(x - goal_x)
     dy = abs(y - goal_y)
-    return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
+    return max(dx,dy) + (math.sqrt(2) - 1) * min(dx, dy)
 
 
 # Node Class
@@ -343,7 +355,7 @@ def run_astar_v2():
             if (nx, ny) in closed_set:    # invalid, cause it was already processed
                 continue
 
-            if dx == 1 and dy == 1:       # calculate cost to reach neighbor
+            if dx != 0 and dy != 0:       # calculate cost to reach neighbor
                 cost = DIAG_COST 
             else:
                 cost = 1
