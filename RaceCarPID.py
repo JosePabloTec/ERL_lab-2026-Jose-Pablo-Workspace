@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
 import heapq
 from itertools import count
+from pqdict import pqdict
 
 width = 30 
 height = 30
@@ -229,62 +230,61 @@ closed_set = set()
 
 def run_astar_v2():
 
-    open_heap = []
+    nodes.clear()
+
+    open_set = pqdict()
     closed_set = set()
 
     start = Node(Start_x, Start_y)
-    goal = Node(Goal_x, Goal_y)
 
     start.g = 0
-    start.h = heuristic(start.x, start.y)
+    start.h = heuristic(Start_x, Start_y)
     start.f = start.g + start.h
 
-    nodes[(start.x, start.y)] = start
+    nodes[(Start_x, Start_y)] = start
+    open_set[(Start_x, Start_y)] = (start.f, start.h)
 
-    heapq.heappush(open_heap, (start.f, start.h, next(counter), start))
+    while open_set:
 
-    while open_heap:
+        (cx, cy), (cf, ch) = open_set.popitem()  # cx = current x, cy = current y, cf = current f, ch = current h
+        current = nodes[(cx, cy)]
 
-        _, _, _, current = heapq.heappop(open_heap)
-
-        if (current.x, current.y) in closed_set:
-            continue
-
-        if current.x == Goal_x and current.y == Goal_y:
-            print("Goal reached!")
+        if (cx, cy) == (Goal_x, Goal_y):   # check if goal was reached
             break
 
-        closed_set.add((current.x, current.y))
+        closed_set.add((cx, cy))           # add to the closed set to prevent processing it again
 
         for dx, dy in directions:
 
-            nx, ny = current.x + dx, current.y + dy
+            nx = cx + dx
+            ny = cy + dy
 
-            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+            if nx < 0 or nx >= width or ny < 0 or ny >= height: # invalid, cause it's out of bounds
                 continue
 
-            if grid[ny, nx] == 1:
+            if grid[ny, nx] == 1:         # invalid, cause there's an obstacle    
                 continue
 
-            if (nx, ny) in closed_set:
+            if (nx, ny) in closed_set:    # invalid, cause it was already processed
                 continue
 
-            step_cost = DIAG_COST if dx != 0 and dy != 0 else 1
-            tentative_g = current.g + step_cost
+            if dx != 0 and dy != 0:       # calculate cost to reach neighbor
+                cost = DIAG_COST 
+            else:
+                cost = 1
 
-            neighbor = get_node(nx, ny)
+            tentative_g = current.g + cost  # calculate a potentially better g cost
 
-            if tentative_g < neighbor.g:
+            neighbor = get_node(nx, ny)     
+
+            if tentative_g < neighbor.g:   
 
                 neighbor.parent = current
                 neighbor.g = tentative_g
                 neighbor.h = heuristic(nx, ny)
                 neighbor.f = neighbor.g + neighbor.h
 
-                heapq.heappush(
-                    open_heap,
-                    (neighbor.f, neighbor.h, next(counter), neighbor)
-                )
+                open_set[(nx, ny)] = (neighbor.f, neighbor.h)
 
     # reconstruct path
     path = []
@@ -359,11 +359,11 @@ class PIDController:
         self.k1 = 20
         self.k2 = 25
         # D
-        self.k11 = 0.22
-        self.k22 = 0.2
+        self.k11 = 0.01
+        self.k22 = 0.01
         #I
-        self.k111 = 0.08
-        self.k222 = 0.03
+        self.k111 = 0.5
+        self.k222 = 0.5
 
         self.previous_d = 0
         self.previous_dtheta = 0
@@ -373,12 +373,10 @@ class PIDController:
 
         self.dt = 0.001
 
-        # -----------------------
         # State machine
-        # -----------------------
         self.state = "TURN"
 
-        self.turn_threshold = math.radians(5)
+        self.turn_threshold = math.radians(3)
         self.return_to_turn_threshold = math.radians(10)
 
 
@@ -393,33 +391,24 @@ class PIDController:
         dx = self.x - x_current
         dy = self.y - y_current
 
-        d = math.sqrt(dx ** 2 + dy ** 2)
+        d = math.sqrt(dx ** 2 + dy ** 2)                       # calculate the distance to target
 
-        desired_heading = math.atan2(dy, dx)
+        desired_heading = math.atan2(dy, dx)                   # calculate the desired yaw
 
-        current_heading = p.getEulerFromQuaternion(orien)[2]
+        current_heading = p.getEulerFromQuaternion(orien)[2]   # get the actual yaw
 
-        dtheta = desired_heading - current_heading
+        dtheta = desired_heading - current_heading             # calculate the angle error
 
-        dtheta = math.atan2(
-            math.sin(dtheta),
-            math.cos(dtheta)
-        )
+        dtheta = math.atan2(math.sin(dtheta),math.cos(dtheta)) #normalize the angle -pi, pi
 
-        # -----------------------
         # PID
-        # -----------------------
 
-        self.integral_d += d * self.dt
-        self.integral_theta += dtheta * self.dt
+        self.integral_d += d * self.dt           # caluclate integral e(t) dt (linear distance)
+        self.integral_theta += dtheta * self.dt  # caluclate integral e(t) dt (yaw)
 
-        derivative_d = (
-            d - self.previous_d
-        ) / self.dt
+        derivative_d = (d - self.previous_d) / self.dt   # rate of change of the distance error
 
-        derivative_theta = (
-            dtheta - self.previous_dtheta
-        ) / self.dt
+        derivative_theta = (dtheta - self.previous_dtheta) / self.dt #rate of change of the yaw error
 
 
         pid_linear = (
@@ -439,9 +428,7 @@ class PIDController:
         self.previous_dtheta = dtheta
 
 
-        # -----------------------
         # State machine
-        # -----------------------
 
         if self.state == "TURN":
 
@@ -534,21 +521,13 @@ class PIDController:
         ]
 
 
-        velocity = [
-            forward[0] * linear_speed,
-            forward[1] * linear_speed,
-            0
-        ]
+        velocity = [forward[0] * linear_speed,forward[1] * linear_speed,0]
 
 
         p.resetBaseVelocity(
             self.car,
             linearVelocity=velocity,
-            angularVelocity=[
-                0,
-                0,
-                angular_speed
-            ]
+            angularVelocity=[0,0,angular_speed]
         )
 
 
