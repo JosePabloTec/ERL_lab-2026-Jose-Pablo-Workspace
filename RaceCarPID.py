@@ -33,6 +33,30 @@ def calculate_cell_center(x,y):
     y = height/2 * cell_size - cell_size/2 - y*cell_size
     return x,y 
 
+def remove_collinear_points(goal_list, tolerance=1e-9):
+    if len(goal_list) <= 2:
+        return goal_list
+
+    simplified = [goal_list[0]]
+
+    for i in range(1, len(goal_list)-1):
+        a = np.array(simplified[-1])
+        b = np.array(goal_list[i])
+        c = np.array(goal_list[i+1])
+
+        ab = b - a
+        bc = c - b
+
+        # 2D cross product
+        cross = ab[0] * bc[1] - ab[1] * bc[0]
+
+        if abs(cross) > tolerance:
+            simplified.append(goal_list[i])
+
+    simplified.append(goal_list[-1])
+
+    return simplified
+
 # Inflate obstacles
 Inflate = True
 
@@ -49,7 +73,7 @@ plt.figure(figsize=(8, 8))
 plt.imshow(grid, cmap="binary", origin="upper")  # grid
 plt.scatter(Start_x, Start_y, color="blue", s=10, label="Start")  # start
 plt.scatter(Goal_x, Goal_y, color="red", s=10, label="Goal")       # end
-plt.title("Occupancy Grid")  
+plt.title("Occupancy Grid Map Prior to Obstacle Inflation")  
 plt.show()
 
 
@@ -289,10 +313,10 @@ def run_astar_v2():
     plt.scatter(Start_x, Start_y, c="blue")
     plt.scatter(Goal_x, Goal_y, c="red")
 
-    plt.title("A* Path FAST")
+    plt.title("A* Search")
     plt.show()
 
-    return goal_list
+    return remove_collinear_points(goal_list)
 
 ##############################################################
 
